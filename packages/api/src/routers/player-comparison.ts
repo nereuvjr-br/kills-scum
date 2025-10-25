@@ -1,0 +1,630 @@
+import { z } from "zod";
+import { publicProcedure, router } from "../index";
+import { db } from "../db";
+import { killfeeds, players } from "../db/schema";
+import { and, or, eq, sql, desc } from "drizzle-orm";
+
+// Helper para converter distância varchar para número
+function parseDistance(distance: string | number | null): number {
+	if (!distance) return 0;
+	if (typeof distance === "number") return distance;
+	// Remove "m" e converte para número
+	const numStr = distance.replace("m", "").trim();
+	return parseFloat(numStr) || 0;
+}
+
+export const playerComparisonRouter = router({
+	compare: publicProcedure
+		.input(
+			z.object({
+				player1Id: z.number(),
+				player2Id: z.number(),
+				startDate: z.string().optional(),
+				endDate: z.string().optional(),
+			}),
+		)
+		.query(async ({ input }) => {
+			try {
+				const { player1Id, player2Id, startDate, endDate } = input;
+
+				// Buscar dados dos players
+				const player1 = await db.query.players.findFirst({
+					where: eq(players.id, player1Id),
+					with: { clan: true },
+				});
+
+				const player2 = await db.query.players.findFirst({
+					where: eq(players.id, player2Id),
+					with: { clan: true },
+				});
+
+				if (!player1 || !player2) {
+					throw new Error("Players não encontrados");
+				}
+
+				// Construir condições de filtro por data
+				const dateConditions = [];
+				if (startDate) {
+					dateConditions.push(sql`${killfeeds.timestamp} >= ${startDate}`);
+				}
+				if (endDate) {
+					dateConditions.push(sql`${killfeeds.timestamp} <= ${endDate}`);
+				}
+
+			// ===== ESTATÍSTICAS PLAYER 1 =====
+			
+			// Total de kills como killer (excluindo NPCs)
+			const player1Kills = await db
+				.select({ count: sql<number>`count(*)::int` })
+				.from(killfeeds)
+				.where(
+					and(
+						eq(killfeeds.killer, player1.name),
+						sql`${killfeeds.victim} NOT LIKE 'NPC %'`,
+						dateConditions.length > 0 ? and(...dateConditions) : undefined,
+					),
+				);			// Total de mortes como victim (excluindo NPCs)
+			const player1Deaths = await db
+				.select({ count: sql<number>`count(*)::int` })
+				.from(killfeeds)
+				.where(
+					and(
+						eq(killfeeds.victim, player1.name),
+						sql`${killfeeds.killer} NOT LIKE 'NPC %'`,
+						dateConditions.length > 0 ? and(...dateConditions) : undefined,
+					),
+				);
+
+			const p1Kills = player1Kills[0]?.count || 0;
+			const p1Deaths = player1Deaths[0]?.count || 0;
+			const p1KD = p1Deaths > 0 ? p1Kills / p1Deaths : p1Kills;
+
+			// Distância média
+			const player1AvgDist = await db
+				.select({ avg: sql<string>`avg(cast(replace(${killfeeds.distance}, 'm', '') as float))` })
+				.from(killfeeds)
+				.where(
+					and(
+						eq(killfeeds.killer, player1.name),
+						sql`${killfeeds.victim} NOT LIKE 'NPC %'`,
+						sql`${killfeeds.killer} NOT LIKE 'NPC %'`,
+						dateConditions.length > 0 ? and(...dateConditions) : undefined,
+					),
+				);
+
+			const p1AvgDistance = Math.round(parseFloat(player1AvgDist[0]?.avg || "0"));
+
+			// Kill mais longo
+			const player1LongestKillData = await db
+				.select()
+				.from(killfeeds)
+				.where(
+					and(
+						eq(killfeeds.killer, player1.name),
+						sql`${killfeeds.victim} NOT LIKE 'NPC %'`,
+						sql`${killfeeds.killer} NOT LIKE 'NPC %'`,
+						dateConditions.length > 0 ? and(...dateConditions) : undefined,
+					),
+				)
+				.orderBy(
+					desc(sql`cast(replace(${killfeeds.distance}, 'm', '') as float)`),
+				)
+				.limit(1);
+
+			const p1LongestKill = player1LongestKillData[0]
+				? {
+						distance: parseDistance(player1LongestKillData[0].distance),
+						killer: player1LongestKillData[0].killer,
+						victim: player1LongestKillData[0].victim,
+						weapon: player1LongestKillData[0].weapon,
+				  }
+				: null;
+
+			// Top armas
+			const player1TopWeapons = await db
+				.select({
+					weapon: killfeeds.weapon,
+					count: sql<number>`count(*)::int`,
+				})
+				.from(killfeeds)
+				.where(
+					and(
+						eq(killfeeds.killer, player1.name),
+						sql`${killfeeds.victim} NOT LIKE 'NPC %'`,
+						sql`${killfeeds.killer} NOT LIKE 'NPC %'`,
+						dateConditions.length > 0 ? and(...dateConditions) : undefined,
+					),
+				)
+				.groupBy(killfeeds.weapon)
+				.orderBy(desc(sql`count(*)`))
+				.limit(5);
+
+			// Top vítimas
+			const player1TopVictims = await db
+				.select({
+					victim: killfeeds.victim,
+					count: sql<number>`count(*)::int`,
+				})
+				.from(killfeeds)
+				.where(
+					and(
+						eq(killfeeds.killer, player1.name),
+						sql`${killfeeds.victim} NOT LIKE 'NPC %'`,
+						sql`${killfeeds.killer} NOT LIKE 'NPC %'`,
+						dateConditions.length > 0 ? and(...dateConditions) : undefined,
+					),
+				)
+				.groupBy(killfeeds.victim)
+				.orderBy(desc(sql`count(*)`))
+				.limit(5);
+
+			// Atividade por hora
+			const player1HourlyActivity = await db
+				.select({
+					hour: sql<number>`extract(hour from ${killfeeds.timestamp})::int`,
+					kills: sql<number>`count(*)::int`,
+				})
+				.from(killfeeds)
+				.where(
+					and(
+						eq(killfeeds.killer, player1.name),
+						sql`${killfeeds.victim} NOT LIKE 'NPC %'`,
+						sql`${killfeeds.killer} NOT LIKE 'NPC %'`,
+						dateConditions.length > 0 ? and(...dateConditions) : undefined,
+					),
+				)
+				.groupBy(sql`extract(hour from ${killfeeds.timestamp})`)
+				.orderBy(sql`extract(hour from ${killfeeds.timestamp})`);
+
+			// Criar array de 24 horas
+			const p1HourlyActivity = Array.from({ length: 24 }, (_, i) => {
+				const found = player1HourlyActivity.find((h) => h.hour === i);
+				return found ? found.kills : 0;
+			});
+
+			// Melhor hora
+			const p1MostActiveHour = player1HourlyActivity.reduce(
+				(max, curr) => (curr.kills > max.kills ? curr : max),
+				{ hour: 0, kills: 0 },
+			).hour;
+
+			// Kills por dia
+			const player1DailyKills = await db
+				.select({
+					date: sql<string>`date(${killfeeds.timestamp})`,
+					kills: sql<number>`count(*)::int`,
+				})
+				.from(killfeeds)
+				.where(
+					and(
+						eq(killfeeds.killer, player1.name),
+						sql`${killfeeds.victim} NOT LIKE 'NPC %'`,
+						sql`${killfeeds.killer} NOT LIKE 'NPC %'`,
+						dateConditions.length > 0 ? and(...dateConditions) : undefined,
+					),
+				)
+				.groupBy(sql`date(${killfeeds.timestamp})`)
+				.orderBy(sql`date(${killfeeds.timestamp})`);
+
+			const p1BestDay = player1DailyKills.reduce(
+				(max, curr) => (curr.kills > max.kills ? curr : max),
+				{ date: "", kills: 0 },
+			);
+
+			// Sequência máxima contra o oponente
+			const p1VsP2Kills = await db
+				.select({
+					timestamp: killfeeds.timestamp,
+					killer: killfeeds.killer,
+				})
+				.from(killfeeds)
+				.where(
+					and(
+						or(
+							and(
+								eq(killfeeds.killer, player1.name),
+								eq(killfeeds.victim, player2.name),
+							),
+							and(
+								eq(killfeeds.killer, player2.name),
+								eq(killfeeds.victim, player1.name),
+							),
+						),
+						dateConditions.length > 0 ? and(...dateConditions) : undefined,
+					),
+				)
+				.orderBy(killfeeds.timestamp);
+
+			let p1MaxStreak = 0;
+			let currentStreak = 0;
+			for (const kill of p1VsP2Kills) {
+				if (kill.killer === player1.name) {
+					currentStreak++;
+					p1MaxStreak = Math.max(p1MaxStreak, currentStreak);
+				} else {
+					currentStreak = 0;
+				}
+			}
+
+			// ===== ESTATÍSTICAS PLAYER 2 =====
+
+			// Total de kills como killer (excluindo NPCs)
+			const player2Kills = await db
+				.select({ count: sql<number>`count(*)::int` })
+				.from(killfeeds)
+				.where(
+					and(
+						eq(killfeeds.killer, player2.name),
+						sql`${killfeeds.victim} NOT LIKE 'NPC %'`,
+						sql`${killfeeds.killer} NOT LIKE 'NPC %'`,
+						dateConditions.length > 0 ? and(...dateConditions) : undefined,
+					),
+				);
+
+			// Total de mortes como victim (excluindo NPCs)
+			const player2Deaths = await db
+				.select({ count: sql<number>`count(*)::int` })
+				.from(killfeeds)
+				.where(
+					and(
+						eq(killfeeds.victim, player2.name),
+						sql`${killfeeds.killer} NOT LIKE 'NPC %'`,
+						dateConditions.length > 0 ? and(...dateConditions) : undefined,
+					),
+				);
+
+			const p2Kills = player2Kills[0]?.count || 0;
+			const p2Deaths = player2Deaths[0]?.count || 0;
+			const p2KD = p2Deaths > 0 ? p2Kills / p2Deaths : p2Kills;
+
+			// Distância média
+			const player2AvgDist = await db
+				.select({ avg: sql<string>`avg(cast(replace(${killfeeds.distance}, 'm', '') as float))` })
+				.from(killfeeds)
+				.where(
+					and(
+						eq(killfeeds.killer, player2.name),
+						sql`${killfeeds.victim} NOT LIKE 'NPC %'`,
+						sql`${killfeeds.killer} NOT LIKE 'NPC %'`,
+						dateConditions.length > 0 ? and(...dateConditions) : undefined,
+					),
+				);
+
+			const p2AvgDistance = Math.round(parseFloat(player2AvgDist[0]?.avg || "0"));
+
+			// Kill mais longo
+			const player2LongestKillData = await db
+				.select()
+				.from(killfeeds)
+				.where(
+					and(
+						eq(killfeeds.killer, player2.name),
+						sql`${killfeeds.victim} NOT LIKE 'NPC %'`,
+						sql`${killfeeds.killer} NOT LIKE 'NPC %'`,
+						dateConditions.length > 0 ? and(...dateConditions) : undefined,
+					),
+				)
+				.orderBy(
+					desc(sql`cast(replace(${killfeeds.distance}, 'm', '') as float)`),
+				)
+				.limit(1);
+
+			const p2LongestKill = player2LongestKillData[0]
+				? {
+						distance: parseDistance(player2LongestKillData[0].distance),
+						killer: player2LongestKillData[0].killer,
+						victim: player2LongestKillData[0].victim,
+						weapon: player2LongestKillData[0].weapon,
+				  }
+				: null;
+
+			// Top armas
+			const player2TopWeapons = await db
+				.select({
+					weapon: killfeeds.weapon,
+					count: sql<number>`count(*)::int`,
+				})
+				.from(killfeeds)
+				.where(
+					and(
+						eq(killfeeds.killer, player2.name),
+						sql`${killfeeds.victim} NOT LIKE 'NPC %'`,
+						sql`${killfeeds.killer} NOT LIKE 'NPC %'`,
+						dateConditions.length > 0 ? and(...dateConditions) : undefined,
+					),
+				)
+				.groupBy(killfeeds.weapon)
+				.orderBy(desc(sql`count(*)`))
+				.limit(5);
+
+			// Top vítimas
+			const player2TopVictims = await db
+				.select({
+					victim: killfeeds.victim,
+					count: sql<number>`count(*)::int`,
+				})
+				.from(killfeeds)
+				.where(
+					and(
+						eq(killfeeds.killer, player2.name),
+						sql`${killfeeds.victim} NOT LIKE 'NPC %'`,
+						sql`${killfeeds.killer} NOT LIKE 'NPC %'`,
+						dateConditions.length > 0 ? and(...dateConditions) : undefined,
+					),
+				)
+				.groupBy(killfeeds.victim)
+				.orderBy(desc(sql`count(*)`))
+				.limit(5);
+
+			// Atividade por hora
+			const player2HourlyActivity = await db
+				.select({
+					hour: sql<number>`extract(hour from ${killfeeds.timestamp})::int`,
+					kills: sql<number>`count(*)::int`,
+				})
+				.from(killfeeds)
+				.where(
+					and(
+						eq(killfeeds.killer, player2.name),
+						sql`${killfeeds.victim} NOT LIKE 'NPC %'`,
+						sql`${killfeeds.killer} NOT LIKE 'NPC %'`,
+						dateConditions.length > 0 ? and(...dateConditions) : undefined,
+					),
+				)
+				.groupBy(sql`extract(hour from ${killfeeds.timestamp})`)
+				.orderBy(sql`extract(hour from ${killfeeds.timestamp})`);
+
+			// Criar array de 24 horas
+			const p2HourlyActivity = Array.from({ length: 24 }, (_, i) => {
+				const found = player2HourlyActivity.find((h) => h.hour === i);
+				return found ? found.kills : 0;
+			});
+
+			// Melhor hora
+			const p2MostActiveHour = player2HourlyActivity.reduce(
+				(max, curr) => (curr.kills > max.kills ? curr : max),
+				{ hour: 0, kills: 0 },
+			).hour;
+
+			// Kills por dia
+			const player2DailyKills = await db
+				.select({
+					date: sql<string>`date(${killfeeds.timestamp})`,
+					kills: sql<number>`count(*)::int`,
+				})
+				.from(killfeeds)
+				.where(
+					and(
+						eq(killfeeds.killer, player2.name),
+						sql`${killfeeds.victim} NOT LIKE 'NPC %'`,
+						sql`${killfeeds.killer} NOT LIKE 'NPC %'`,
+						dateConditions.length > 0 ? and(...dateConditions) : undefined,
+					),
+				)
+				.groupBy(sql`date(${killfeeds.timestamp})`)
+				.orderBy(sql`date(${killfeeds.timestamp})`);
+
+			const p2BestDay = player2DailyKills.reduce(
+				(max, curr) => (curr.kills > max.kills ? curr : max),
+				{ date: "", kills: 0 },
+			);
+
+			// Sequência máxima contra o oponente
+			let p2MaxStreak = 0;
+			currentStreak = 0;
+			for (const kill of p1VsP2Kills) {
+				if (kill.killer === player2.name) {
+					currentStreak++;
+					p2MaxStreak = Math.max(p2MaxStreak, currentStreak);
+				} else {
+					currentStreak = 0;
+				}
+			}
+
+			// ===== HEAD TO HEAD =====
+
+			// Kills do player1 contra player2
+			const p1VsP2 = await db
+				.select({ count: sql<number>`count(*)::int` })
+				.from(killfeeds)
+				.where(
+					and(
+						eq(killfeeds.killer, player1.name),
+						eq(killfeeds.victim, player2.name),
+						dateConditions.length > 0 ? and(...dateConditions) : undefined,
+					),
+				);
+
+			// Kills do player2 contra player1
+			const p2VsP1 = await db
+				.select({ count: sql<number>`count(*)::int` })
+				.from(killfeeds)
+				.where(
+					and(
+						eq(killfeeds.killer, player2.name),
+						eq(killfeeds.victim, player1.name),
+						dateConditions.length > 0 ? and(...dateConditions) : undefined,
+					),
+				);
+
+			const player1Wins = p1VsP2[0]?.count || 0;
+			const player2Wins = p2VsP1[0]?.count || 0;
+
+			// Armas usadas pelo player1 contra player2
+			const p1VsP2Weapons = await db
+				.select({
+					weapon: killfeeds.weapon,
+					count: sql<number>`count(*)::int`,
+				})
+				.from(killfeeds)
+				.where(
+					and(
+						eq(killfeeds.killer, player1.name),
+						eq(killfeeds.victim, player2.name),
+						dateConditions.length > 0 ? and(...dateConditions) : undefined,
+					),
+				)
+				.groupBy(killfeeds.weapon)
+				.orderBy(desc(sql`count(*)`))
+				.limit(5);
+
+			// Distância média p1 vs p2
+			const p1VsP2AvgDist = await db
+				.select({ avg: sql<string>`avg(cast(replace(${killfeeds.distance}, 'm', '') as float))` })
+				.from(killfeeds)
+				.where(
+					and(
+						eq(killfeeds.killer, player1.name),
+						eq(killfeeds.victim, player2.name),
+						dateConditions.length > 0 ? and(...dateConditions) : undefined,
+					),
+				);
+
+			const p1VsP2AvgDistance = Math.round(parseFloat(p1VsP2AvgDist[0]?.avg || "0"));
+
+			// Armas usadas pelo player2 contra player1
+			const p2VsP1Weapons = await db
+				.select({
+					weapon: killfeeds.weapon,
+					count: sql<number>`count(*)::int`,
+				})
+				.from(killfeeds)
+				.where(
+					and(
+						eq(killfeeds.killer, player2.name),
+						eq(killfeeds.victim, player1.name),
+						dateConditions.length > 0 ? and(...dateConditions) : undefined,
+					),
+				)
+				.groupBy(killfeeds.weapon)
+				.orderBy(desc(sql`count(*)`))
+				.limit(5);
+
+			// Distância média p2 vs p1
+			const p2VsP1AvgDist = await db
+				.select({ avg: sql<string>`avg(cast(replace(${killfeeds.distance}, 'm', '') as float))` })
+				.from(killfeeds)
+				.where(
+					and(
+						eq(killfeeds.killer, player2.name),
+						eq(killfeeds.victim, player1.name),
+						dateConditions.length > 0 ? and(...dateConditions) : undefined,
+					),
+				);
+
+			const p2VsP1AvgDistance = Math.round(parseFloat(p2VsP1AvgDist[0]?.avg || "0"));
+
+			// Confrontos por dia
+			const allDates = new Set<string>();
+			player1DailyKills.forEach((d) => allDates.add(d.date));
+			player2DailyKills.forEach((d) => allDates.add(d.date));
+
+			const sortedDates = Array.from(allDates).sort();
+
+			const dailyComparison = sortedDates.map((date) => ({
+				date,
+				player1Kills: player1DailyKills.find((d) => d.date === date)?.kills || 0,
+				player2Kills: player2DailyKills.find((d) => d.date === date)?.kills || 0,
+			}));
+
+			// Confrontos diretos por dia
+			const headToHeadDaily = await db
+				.select({
+					date: sql<string>`date(${killfeeds.timestamp})`,
+					player1Kills: sql<number>`sum(case when ${killfeeds.killer} = ${player1.name} then 1 else 0 end)::int`,
+					player2Kills: sql<number>`sum(case when ${killfeeds.killer} = ${player2.name} then 1 else 0 end)::int`,
+				})
+				.from(killfeeds)
+				.where(
+					and(
+						or(
+							and(
+								eq(killfeeds.killer, player1.name),
+								eq(killfeeds.victim, player2.name),
+							),
+							and(
+								eq(killfeeds.killer, player2.name),
+								eq(killfeeds.victim, player1.name),
+							),
+						),
+						dateConditions.length > 0 ? and(...dateConditions) : undefined,
+					),
+				)
+				.groupBy(sql`date(${killfeeds.timestamp})`)
+				.orderBy(sql`date(${killfeeds.timestamp})`);
+
+			// Últimas batalhas
+			const recentBattles = await db
+				.select()
+				.from(killfeeds)
+				.where(
+					and(
+						or(
+							and(
+								eq(killfeeds.killer, player1.name),
+								eq(killfeeds.victim, player2.name),
+							),
+							and(
+								eq(killfeeds.killer, player2.name),
+								eq(killfeeds.victim, player1.name),
+							),
+						),
+						dateConditions.length > 0 ? and(...dateConditions) : undefined,
+					),
+				)
+				.orderBy(desc(killfeeds.timestamp))
+				.limit(10);
+
+			return {
+				player1: {
+					...player1,
+					totalKills: p1Kills,
+					totalDeaths: p1Deaths,
+					kd: p1KD,
+					avgDistance: p1AvgDistance,
+					longestKill: p1LongestKill,
+					topWeapons: player1TopWeapons,
+					topVictims: player1TopVictims,
+					hourlyActivity: p1HourlyActivity,
+					mostActiveHour: p1MostActiveHour,
+					dailyKills: player1DailyKills,
+					bestDay: p1BestDay,
+					maxStreak: p1MaxStreak,
+				},
+				player2: {
+					...player2,
+					totalKills: p2Kills,
+					totalDeaths: p2Deaths,
+					kd: p2KD,
+					avgDistance: p2AvgDistance,
+					longestKill: p2LongestKill,
+					topWeapons: player2TopWeapons,
+					topVictims: player2TopVictims,
+					hourlyActivity: p2HourlyActivity,
+					mostActiveHour: p2MostActiveHour,
+					dailyKills: player2DailyKills,
+					bestDay: p2BestDay,
+					maxStreak: p2MaxStreak,
+			},
+			headToHead: {
+				player1Wins,
+				player2Wins,
+				player1Stats: {
+					avgDistance: p1VsP2AvgDistance,
+					topWeapons: p1VsP2Weapons,
+				},
+				player2Stats: {
+					avgDistance: p2VsP1AvgDistance,
+					topWeapons: p2VsP1Weapons,
+				},
+				dailyComparison,
+				headToHeadDaily,
+				recentBattles,
+			},
+		};
+	} catch (error) {
+		console.error("Erro na comparação de players:", error);
+		throw error;
+	}
+}),
+});
