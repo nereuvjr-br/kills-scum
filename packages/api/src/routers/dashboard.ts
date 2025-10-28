@@ -3,6 +3,7 @@ import { publicProcedure, router } from '../index';
 import { db } from '../db';
 import { killfeeds, players, clans } from '../db/schema';
 import { desc, eq } from 'drizzle-orm';
+import { asc } from 'drizzle-orm';
 
 interface KillfeedDocument {
   id: number;
@@ -47,19 +48,39 @@ function buildCharts(documents: KillfeedDocument[]) {
     ['200m+', 0],
   ]);
 
+  // Obter data atual (início do dia de hoje)
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+  // Calcular início dos últimos 7 dias (6 dias atrás + hoje = 7 dias)
+  const sevenDaysAgo = new Date(today);
+  sevenDaysAgo.setDate(today.getDate() - 6);
+
+  // Função auxiliar para formatar data como YYYY-MM-DD
+  const formatDateKey = (date: Date): string => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
   documents.forEach((doc) => {
     const killDate = new Date(doc.timestamp);
 
     if (!Number.isNaN(killDate.getTime())) {
-      const dayKey = killDate.toISOString().split('T')[0];
-      if (dayKey) {
-        killsByDay.set(dayKey, (killsByDay.get(dayKey) ?? 0) + 1);
-      }
+      const killDateOnly = new Date(killDate.getFullYear(), killDate.getMonth(), killDate.getDate());
 
-      const hour = killDate.getHours();
-      const hourBucket = killsByHour[hour];
-      if (hourBucket) {
-        hourBucket.kills += 1;
+      // Filtrar apenas últimos 7 dias (incluindo hoje)
+      if (killDateOnly >= sevenDaysAgo && killDateOnly <= today) {
+        const dayKey = formatDateKey(killDateOnly);
+        killsByDay.set(dayKey, (killsByDay.get(dayKey) ?? 0) + 1);
+
+        // Kills por hora - apenas dos últimos 7 dias
+        const hour = killDate.getHours();
+        const hourBucket = killsByHour[hour];
+        if (hourBucket) {
+          hourBucket.kills += 1;
+        }
       }
     }
 
@@ -79,13 +100,23 @@ function buildCharts(documents: KillfeedDocument[]) {
     }
   });
 
+  // Preencher TODOS os últimos 7 dias com zero kills (se não houver dados)
+  const last7DaysMap = new Map<string, number>();
+  for (let i = 0; i < 7; i++) {
+    const date = new Date(today);
+    date.setDate(today.getDate() - (6 - i)); // De 6 dias atrás até hoje
+    const dayKey = formatDateKey(date);
+    last7DaysMap.set(dayKey, killsByDay.get(dayKey) ?? 0);
+  }
+
   return {
-    killsByDay: Array.from(killsByDay.entries())
+    killsByDay: Array.from(last7DaysMap.entries())
       .sort(([a], [b]) => (a < b ? -1 : 1))
       .map(([date, kills]) => ({ date, kills })),
     killsByHour: killsByHour.map(({ hour, kills }) => ({
       hour: `${hour.toString().padStart(2, '0')}h`,
       kills,
+      average: Number((kills / 7).toFixed(1)), // Média dos últimos 7 dias
     })),
     distanceBuckets: Array.from(distanceBuckets.entries()).map(([bucket, kills]) => ({
       bucket,
@@ -132,8 +163,10 @@ export const dashboardRouter = router({
 
     const sortDesc = (entries: Array<[string, number]>) => entries.sort((a, b) => b[1] - a[1]);
 
-    // Buscar clãs para os top killers
-    const topKillersData = sortDesc(Array.from(killerStats.entries())).slice(0, 10);
+    // Buscar clãs para os top killers (filtrar Unknown)
+    const topKillersData = sortDesc(Array.from(killerStats.entries()))
+      .filter(([name]) => name.toLowerCase() !== 'unknown')
+      .slice(0, 10);
     const topKillers = await Promise.all(
       topKillersData.map(async ([name, kills]) => {
         const clan = await getPlayerClan(name);
@@ -141,8 +174,10 @@ export const dashboardRouter = router({
       })
     );
 
-    // Buscar clãs para os top victims
-    const topVictimsData = sortDesc(Array.from(victimStats.entries())).slice(0, 10);
+    // Buscar clãs para os top victims (filtrar Unknown)
+    const topVictimsData = sortDesc(Array.from(victimStats.entries()))
+      .filter(([name]) => name.toLowerCase() !== 'unknown')
+      .slice(0, 10);
     const topVictims = await Promise.all(
       topVictimsData.map(async ([name, deaths]) => {
         const clan = await getPlayerClan(name);
@@ -175,6 +210,9 @@ export const dashboardRouter = router({
 
     const kdRatios: Array<{ name: string; kills: number; deaths: number; kd: number }> = [];
     Array.from(killerStats.keys()).forEach((name) => {
+      // Filtrar jogadores "Unknown"
+      if (name.toLowerCase() === 'unknown') return;
+
       const kills = killerStats.get(name) ?? 0;
       const deaths = victimStats.get(name) ?? 0;
       const kd = deaths > 0 ? kills / deaths : kills;
@@ -357,5 +395,20 @@ export const dashboardRouter = router({
     // Sem cache, apenas retorna sucesso
     return { refreshedAt: new Date().toISOString() };
   }),
-});
 
+  getFirstTimestamp: publicProcedure.query(async () => {
+    // Busca o registro com o menor timestamp (primeiro por data)
+    const result = await db
+      .select({ timestamp: killfeeds.timestamp })
+      .from(killfeeds)
+      .orderBy(asc(killfeeds.timestamp))
+      .limit(1);
+
+    if (!result || result.length === 0) return { firstTimestamp: null };
+
+    const first = result[0];
+    if (!first || !first.timestamp) return { firstTimestamp: null };
+
+    return { firstTimestamp: new Date(first.timestamp).toISOString() };
+  }),
+});

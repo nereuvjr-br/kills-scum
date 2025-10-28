@@ -39,6 +39,12 @@ export default function AdminLayout({
               >
                 Players
               </Link>
+              <Link
+                href="/admin/import"
+                className="px-4 py-2 rounded-md text-sm font-medium hover:bg-accent transition-colors"
+              >
+                Importar
+              </Link>
             </nav>
           </div>
         </div>

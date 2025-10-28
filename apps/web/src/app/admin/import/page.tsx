@@ -1,5 +1,6 @@
 'use client';
 
+import WarningAboutData from '@/components/warning-about-data';
 import { CSVImporterComponent } from '@/components/csv-importer/csv-importer';
 
 export default function ImportPage() {
@@ -14,6 +15,8 @@ export default function ImportPage() {
             Importe dados de kills de um arquivo CSV para o banco de dados
           </p>
         </div>
+
+        <WarningAboutData />
 
         <CSVImporterComponent />
 

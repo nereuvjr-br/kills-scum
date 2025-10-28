@@ -1,6 +1,7 @@
 'use client';
 
 import { trpc } from '@/utils/trpc';
+import WarningAboutData from '@/components/warning-about-data';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PlayerSearch } from '@/components/player-search';
@@ -76,6 +77,8 @@ export default function DashboardPage() {
         onRefresh={handleRefresh}
         isRefreshing={refreshCacheMutation.isPending}
       />
+
+      <WarningAboutData />
 
       <section>
         <SummaryCards
