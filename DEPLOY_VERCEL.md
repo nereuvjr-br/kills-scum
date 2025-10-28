@@ -4,13 +4,15 @@
 
 Para fazer o deploy no Vercel, você **DEVE** configurar as seguintes variáveis de ambiente:
 
-### 1. DATABASE_URL (OBRIGATÓRIO)
+### 1. DATABASE_URL (OBRIGATÓRIO para runtime)
 
 A conexão com o banco de dados PostgreSQL:
 
 ```
 DATABASE_URL=postgresql://usuario:senha@host:porta/nome_do_banco
 ```
+
+**Importante:** A aplicação foi otimizada para não falhar durante o build se `DATABASE_URL` não estiver configurada. A conexão com o banco é inicializada apenas em runtime, quando realmente necessária.
 
 **Exemplo com Supabase:**
 ```
