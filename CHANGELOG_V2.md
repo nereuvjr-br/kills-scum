@@ -5,7 +5,7 @@
 **Data**: 24/10/2025  
 **Versão**: 2.0.0 (Refatoração Completa)  
 **Status**: ✅ Implementação Completa
-
+---
 ---
 
 ## 🔄 Mudanças Principais
