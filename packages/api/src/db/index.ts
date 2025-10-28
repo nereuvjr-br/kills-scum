@@ -2,14 +2,14 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import * as schema from './schema';
 
-const DATABASE_URL = process.env.DATABASE_URL;
-
 // Durante o build, não inicializa o pool de conexões
 // Apenas em runtime (quando realmente for fazer queries)
 let pool: Pool | null = null;
 let dbInstance: ReturnType<typeof drizzle> | null = null;
 
 function getPool(): Pool {
+  const DATABASE_URL = process.env.DATABASE_URL;
+  
   if (!DATABASE_URL) {
     throw new Error('DATABASE_URL não está configurada nas variáveis de ambiente');
   }
