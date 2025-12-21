@@ -1,0 +1,10 @@
+﻿| 21/12/2025 01:30:02 | docs: Revise README.md to provide a detailed overview of the Kills Scum Dashboard project, its features, technologies, and documentation. |
+| 28/10/2025 15:25:42 | fix: add environment variables to turbo.json for Vercel build |
+| 28/10/2025 15:12:36 | fix: move DATABASE_URL declaration inside getPool function for better scope management |
+| 28/10/2025 14:57:19 | fix: lazy initialization do database para suportar build sem DATABASE_URL |
+| 28/10/2025 14:37:38 | feat: Add environment configuration files for database and authentication setup |
+| 28/10/2025 14:22:49 | fix: corrige conflito de versões do Next.js no monorepo - Move Next.js de dependency para peerDependency no package api - Ajusta createContext para não depender de tipos específicos do Next.js - Resolve erro de build no Vercel com tipos incompatíveis - Build local testado e funcionando corretamente |
+| 28/10/2025 14:02:13 | chore: Update CHANGELOG_V2.md for version 2.0.0 release |
+| 28/10/2025 13:59:56 | feat: Enhance dashboard with data filtering and new components for improved statistics |
+| 25/10/2025 00:20:04 | feat: Add scripts for managing killfeeds and clans in Appwrite |
+| 24/10/2025 12:10:28 | initial commit |
